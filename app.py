@@ -122,7 +122,7 @@ if uploaded_file is not None:
                         st.session_state.current_word_index += 1
                         if st.session_state.current_word_index >= len(duplicate_words):
                             st.session_state.current_word_index = 0
-                        st.experimental_rerun()
+                        st.rerun()
                 
                 with col2:
                     if st.button("More than one word (need to classify)", 
@@ -147,7 +147,7 @@ if uploaded_file is not None:
                         st.session_state.current_word_index += 1
                         if st.session_state.current_word_index >= len(duplicate_words):
                             st.session_state.current_word_index = 0
-                        st.experimental_rerun()
+                        st.rerun()
                 
                 # Only show detailed classification if button is clicked
                 if st.session_state.get('show_classification', False):
@@ -200,7 +200,7 @@ if uploaded_file is not None:
                         st.session_state.current_word_index += 1
                         if st.session_state.current_word_index >= len(duplicate_words):
                             st.session_state.current_word_index = 0
-                        st.experimental_rerun()
+                        st.rerun()
                 
                 # Show progress
                 st.markdown("---")
