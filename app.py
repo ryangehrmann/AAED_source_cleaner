@@ -60,10 +60,10 @@ if uploaded_file is not None:
             single_words = word_counts[word_counts == 1].index
             df.loc[df['word'].isin(single_words), 'homophone'] = 1
                 
-            # Find duplicate words that haven't been classified yet
+            # Get list of words where at least one instance is unclassified
             duplicate_words = df[
                 (df.duplicated(subset=['word'], keep=False)) & 
-                (df['homophone'].isna())
+                (df.groupby('word')['homophone'].transform(lambda x: x.isna().any()))
             ]['word'].unique().tolist()
             
             # Check if there are any duplicates left to classify
