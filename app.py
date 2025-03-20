@@ -38,47 +38,51 @@ if uploaded_file is not None:
         if missing_columns:
             st.error(f"Missing required columns: {', '.join(missing_columns)}")
         else:
-            # Initialize homophone column if it doesn't exist
-            if 'homophone' not in df.columns:
-                df['homophone'] = np.nan
-            
-            # Initialize session state for the dataframe if not already present
-            if 'current_df' not in st.session_state:
-                st.session_state.current_df = df.copy()
+            # Initialize or update the main dataframe
+            if 'main_df' not in st.session_state:
+                # First time loading this file
+                st.session_state.main_df = df.copy()
+                
+                # Initialize homophone column if it doesn't exist
+                if 'homophone' not in st.session_state.main_df.columns:
+                    st.session_state.main_df['homophone'] = np.nan
             else:
-                # If we're reloading a file, update our stored dataframe
-                # but preserve any classifications made in the current session
-                if 'file_name' not in st.session_state or st.session_state.get('file_name') != uploaded_file.name:
-                    st.session_state.current_df = df.copy()
+                # If uploading a new file, replace main_df
+                if 'file_name' not in st.session_state or st.session_state.file_name != uploaded_file.name:
+                    st.session_state.main_df = df.copy()
+                    
+                    # Initialize homophone column if it doesn't exist
+                    if 'homophone' not in st.session_state.main_df.columns:
+                        st.session_state.main_df['homophone'] = np.nan
+                    
+                    # Remember the file name
                     st.session_state.file_name = uploaded_file.name
             
             # Use the session state dataframe for all operations
-            df = st.session_state.current_df
-            
+            df = st.session_state.main_df
+                
             # Mark single occurrence words with homophone value of 1
             word_counts = df['word'].value_counts()
             single_words = word_counts[word_counts == 1].index
             df.loc[df['word'].isin(single_words), 'homophone'] = 1
-                
-            # Get list of words where at least one instance is unclassified
-            duplicate_words = df[
-                (df.duplicated(subset=['word'], keep=False)) & 
-                (df.groupby('word')['homophone'].transform(lambda x: x.isna().any()))
-            ]['word'].unique().tolist()
             
-            # Check if there are any duplicates left to classify
-            if len(duplicate_words) > 0:
-                # Get the current word to classify
-                if 'current_word_index' not in st.session_state:
-                    st.session_state.current_word_index = 0
+            # Get only unclassified rows
+            unclassified_df = df[df['homophone'].isna()].copy()
+            
+            # If we're just starting and haven't processed anything yet
+            if 'working_df' not in st.session_state:
+                st.session_state.working_df = unclassified_df.copy()
+            
+            # Check if there are any unclassified rows left
+            if len(st.session_state.working_df) > 0:
+                # Get the first word that needs classification
+                current_word = st.session_state.working_df['word'].iloc[0]
                 
-                current_word = duplicate_words[st.session_state.current_word_index]
+                # Get all entries for this word
+                word_entries = st.session_state.working_df[st.session_state.working_df['word'] == current_word]
                 
                 # Display the current word being classified
                 st.header(f"Word: {current_word}")
-                
-                # Get all entries for this word
-                word_entries = df[(df['word'] == current_word) & (df['homophone'].isna())]
                 
                 # Display entries in a table format for easier scanning
                 st.subheader(f"Entries containing this word ({len(word_entries)} occurrences):")
@@ -112,16 +116,16 @@ if uploaded_file is not None:
                                 use_container_width=True,
                                 help="Select this if all occurrences are the same word with the same meaning"):
                         # Mark all with homophone value of 1
-                        indices = word_entries.index.tolist()
-                        df.loc[indices, 'homophone'] = 1
+                        for idx, row in word_entries.iterrows():
+                            # Update in our main dataframe
+                            st.session_state.main_df.loc[
+                                (st.session_state.main_df['index'] == row['index']) & 
+                                (st.session_state.main_df['sub_index'] == row['sub_index']), 
+                                'homophone'
+                            ] = 1
                         
-                        # Make sure we update the session state dataframe
-                        st.session_state.current_df = df
-                        
-                        # Move to next word
-                        st.session_state.current_word_index += 1
-                        if st.session_state.current_word_index >= len(duplicate_words):
-                            st.session_state.current_word_index = 0
+                        # Remove processed words from working dataframe
+                        st.session_state.working_df = st.session_state.working_df[st.session_state.working_df['word'] != current_word]
                         st.rerun()
                 
                 with col2:
@@ -136,17 +140,16 @@ if uploaded_file is not None:
                                 use_container_width=True,
                                 help="Select this if each occurrence is a different word/meaning"):
                         # Assign sequential numbers to each occurrence
-                        indices = word_entries.index.tolist()
-                        for i, idx in enumerate(indices, start=1):
-                            df.loc[idx, 'homophone'] = i
+                        for i, (idx, row) in enumerate(word_entries.iterrows(), start=1):
+                            # Update in our main dataframe
+                            st.session_state.main_df.loc[
+                                (st.session_state.main_df['index'] == row['index']) & 
+                                (st.session_state.main_df['sub_index'] == row['sub_index']), 
+                                'homophone'
+                            ] = i
                         
-                        # Make sure we update the session state dataframe
-                        st.session_state.current_df = df
-                        
-                        # Move to next word
-                        st.session_state.current_word_index += 1
-                        if st.session_state.current_word_index >= len(duplicate_words):
-                            st.session_state.current_word_index = 0
+                        # Remove processed words from working dataframe
+                        st.session_state.working_df = st.session_state.working_df[st.session_state.working_df['word'] != current_word]
                         st.rerun()
                 
                 # Only show detailed classification if button is clicked
@@ -160,12 +163,13 @@ if uploaded_file is not None:
                     
                     # Create a classification dataframe
                     classification_df = pd.DataFrame({
-                        'Entry': [f"#{entry['index']}-{entry['sub_index']}: {entry['gloss'][:50]}" 
-                                for _, entry in word_entries.iterrows()]
+                        'Entry': [f"#{row['index']}-{row['sub_index']}: {row['gloss'][:50]}" 
+                                for _, row in word_entries.iterrows()]
                     })
                     
                     # Create a more user-friendly selection interface with radio buttons
-                    for i in range(len(classification_df)):
+                    selection_values = {}
+                    for i, (idx, row) in enumerate(word_entries.iterrows()):
                         st.markdown(f"**{classification_df.loc[i, 'Entry']}**")
                         
                         # Use radio buttons for mutually exclusive selection
@@ -177,36 +181,48 @@ if uploaded_file is not None:
                             index=0  # Default to group 1
                         )
                         
-                        # Store the selection in session state
-                        if 'selections' not in st.session_state:
-                            st.session_state.selections = {}
-                        st.session_state.selections[i] = selected_group
+                        # Store the selection
+                        selection_values[i] = {
+                            "index": row['index'],
+                            "sub_index": row['sub_index'],
+                            "group": selected_group
+                        }
                         
                         st.markdown("---")
                     
                     if st.button("Save Classification & Continue"):
                         # Process the selections and update the dataframe
-                        for i, (idx, entry) in enumerate(word_entries.iterrows()):
-                            selected_group = st.session_state.selections.get(i, 1)
-                            df.loc[idx, 'homophone'] = selected_group
+                        for i, selection in selection_values.items():
+                            # Update in our main dataframe
+                            st.session_state.main_df.loc[
+                                (st.session_state.main_df['index'] == selection["index"]) & 
+                                (st.session_state.main_df['sub_index'] == selection["sub_index"]), 
+                                'homophone'
+                            ] = selection["group"]
                         
-                        # Make sure we update the session state dataframe
-                        st.session_state.current_df = df
+                        # Remove processed words from working dataframe
+                        st.session_state.working_df = st.session_state.working_df[st.session_state.working_df['word'] != current_word]
                         
-                        # Reset classification view and move to next word
+                        # Reset classification view
                         st.session_state.show_classification = False
-                        if 'selections' in st.session_state:
-                            del st.session_state.selections
-                        st.session_state.current_word_index += 1
-                        if st.session_state.current_word_index >= len(duplicate_words):
-                            st.session_state.current_word_index = 0
                         st.rerun()
                 
                 # Show progress
                 st.markdown("---")
-                progress = min(1.0, (st.session_state.current_word_index + 1) / len(duplicate_words))
+                total_unclassified = len(st.session_state.main_df[st.session_state.main_df['homophone'].isna()])
+                total_words = len(st.session_state.main_df)
+                classified_words = total_words - total_unclassified
+                progress = classified_words / total_words
                 st.progress(progress)
-                st.write(f"Progress: {st.session_state.current_word_index + 1}/{len(duplicate_words)} words to classify")
+                st.write(f"Progress: {classified_words}/{total_words} words classified ({progress:.1%})")
+                
+                # Add a skip button for troubleshooting
+                if st.button("Skip this word"):
+                    # Move this word to the end of the working dataframe
+                    skipped_entries = st.session_state.working_df[st.session_state.working_df['word'] == current_word]
+                    remaining_entries = st.session_state.working_df[st.session_state.working_df['word'] != current_word]
+                    st.session_state.working_df = pd.concat([remaining_entries, skipped_entries])
+                    st.rerun()
             
             else:
                 # All words have been classified
@@ -217,16 +233,12 @@ if uploaded_file is not None:
             st.markdown("### Export Database")
             st.markdown("You can export the database at any time. Simply re-upload the database the next time you run this app to continue your work on this data set.")
             
-            # Store the dataframe in session state to ensure it persists between reruns
-            if 'current_df' not in st.session_state:
-                st.session_state.current_df = df
-            else:
-                # Make sure we're using the most up-to-date version
-                st.session_state.current_df = df
+            # Make sure we're using the current state of the dataframe
+            export_df = st.session_state.main_df
             
             st.download_button(
                 label="Export Database",
-                data=to_excel_bytes(st.session_state.current_df),
+                data=to_excel_bytes(export_df),
                 file_name=f"classified_{uploaded_file.name}",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
